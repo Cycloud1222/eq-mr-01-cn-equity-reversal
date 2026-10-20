@@ -1,0 +1,48 @@
+
+# ==============================
+# Python cache and virtual environments
+# ==============================
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ==============================
+# Secrets and local environment
+# ==============================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ==============================
+# Market data: keep local, do not upload
+# ==============================
+data/raw/
+data/processed/
+data/private/
+
+# ==============================
+# Logs and temporary outputs
+# ==============================
+logs/
+*.log
+results/tmp/
+
+# ==============================
+# OS and editor files
+# ==============================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ==============================
+# Test and coverage artifacts
+# ==============================
+.pytest_cache/
+.coverage
+htmlcov/

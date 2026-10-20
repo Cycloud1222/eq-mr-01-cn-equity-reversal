@@ -1,0 +1,25 @@
+project_id: EQ-MR-01
+market: CN_A_SHARE
+start_date: "2015-01-01"
+end_date: "2025-12-31"
+
+frequency: daily
+signal_formation_days: [1, 5, 20]
+holding_days: [1, 2, 5]
+
+universe:
+  exchanges: ["SH", "SZ"]
+  exclude_etf: true
+  exclude_fund: true
+  exclude_bj: true
+  historical_membership_verified: false
+
+execution:
+  signal_time: close
+  execution_time: next_open
+  allow_short: false
+
+data:
+  primary_source: baostock
+  preserve_raw: true
+  timezone: Asia/Shanghai
