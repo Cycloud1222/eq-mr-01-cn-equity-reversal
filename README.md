@@ -1,59 +1,108 @@
-# EQ-MR-01: A-Share Short-Term Reversal Research
+# A股短期反转效应量化研究
 
-## 1. Project Overview
+**项目编号：** EQ-MR-01  
+**研究市场：** 中国 A 股市场（沪深交易所）  
+**研究频率：** 日线  
+**当前阶段：** 行情数据基础设施搭建与初步质量验证
 
-This project studies short-term reversal effects in China's A-share equity market.
+## 一、项目简介
 
-The objective is to determine whether stocks with relatively poor recent returns subsequently outperform stocks with strong recent returns, and whether the effect remains meaningful after accounting for market conditions, trading constraints, and transaction costs.
+本项目旨在研究中国 A 股市场是否存在短期反转效应，即近期收益率相对较低的股票，未来是否可能取得相对较高的收益率。
 
-This is a quantitative research project, not an assumption that the strategy will be profitable.
+研究将从历史日线行情出发，逐步构建短期收益率指标、反转信号和未来收益标签，并通过分组分析、统计检验、交易成本分析及样本外测试评估该现象是否具有稳健性。
 
-## 2. Research Questions
+本项目以可复现、严谨的量化研究流程为目标，不预设策略必然盈利。
 
-- Does short-term reversal exist in A-share equities?
-- How does the effect vary across formation and holding periods?
-- Does industry adjustment change the results?
-- Does market volatility affect the signal?
-- Does the effect survive realistic execution assumptions and transaction costs?
+## 二、核心研究问题
 
-## 3. Initial Research Scope
+1. A 股市场是否存在短期反转效应？
+2. 不同信号形成周期和持有周期下，反转效应有何差异？
+3. 行业调整和不同市场状态是否会影响研究结果？
+4. 考虑交易成本、停牌、涨跌停等实际交易约束后，信号是否仍然有效？
+5. 在样本外数据中，研究结论能否保持稳定？
 
-- Market: Shanghai and Shenzhen A-share equities
-- Frequency: Daily
-- Initial sample period: 2015-01-01 to 2025-12-31
-- Formation periods: 1, 5, and 20 trading days
-- Holding periods: 1, 2, and 5 trading days
-- Primary tools: Python, pandas, NumPy, SciPy, statsmodels
+## 三、初始研究范围
 
-The final sample period and security universe depend on data availability and quality checks.
+| 项目 | 初始设定 |
+|---|---|
+| 市场范围 | 沪深 A 股 |
+| 数据频率 | 日线 |
+| 初始样本区间 | 2015-01-01 至 2025-12-31 |
+| 初步信号形成周期 | 1、5、20 个交易日 |
+| 初步收益观察周期 | 1、2、5 个交易日 |
+| 主要工具 | Python、pandas、NumPy、SciPy、statsmodels |
+| 初步数据源 | BaoStock |
+| 备用数据源 | AKShare |
 
-## 4. Research Principles
+初始样本区间和股票范围将根据数据可用性、历史覆盖情况及质量审计结果进一步确定。目前的小样本仅用于验证研究流程，不代表对全市场的实证结论。
 
-- Avoid look-ahead bias.
-- Document survivorship bias and historical universe limitations.
-- Preserve raw data separately from processed data.
-- Account for corporate actions and trading restrictions.
-- Separate research signals from executable trading strategies.
-- Report out-of-sample results and transaction-cost sensitivity.
-- Preserve reproducible configurations and experiment logs.
+## 四、研究原则
 
-## 5. Repository Structure
+- **避免未来函数：** 选股信号只能使用决策时点已经获得的信息。
+- **关注样本偏差：** 记录历史股票范围、退市股票覆盖和幸存者偏差限制。
+- **保留原始数据：** 原始行情与标准化数据分开保存，不直接覆盖原始文件。
+- **审慎处理公司行为：** 后续研究需要验证复权方式及分红、送股等因素的影响。
+- **考虑交易约束：** 逐步纳入停牌、涨跌停、A 股 T+1 规则及交易成本。
+- **区分研究标签与交易信号：** 未来收益仅用于评估，不得作为当期选股输入。
+- **重视样本外验证：** 不仅关注样本内收益，也要检查结果的稳健性。
+- **确保可复现：** 记录依赖版本、数据来源、实验参数和质量检查结果。
 
-- `src/`: reusable research code
-- `notebooks/`: exploratory analysis
-- `configs/`: experiment configurations
-- `tests/`: automated validation
-- `docs/`: research notes and data documentation
-- `results/`: approved summary tables and figures
+## 五、项目目录结构
 
-## 6. Current Status
+```text
+equity_short_term_reversal/
+├── README.md
+├── requirements-lock.txt
+├── .gitignore
+├── configs/              # 研究参数配置
+├── data/
+│   ├── raw/              # 原始行情数据
+│   ├── processed/        # 标准化及处理后的数据
+│   └── manifests/        # 数据来源与处理记录
+├── notebooks/            # 探索性分析
+├── src/                  # 可复用研究代码
+├── tests/                # 自动化测试
+├── results/
+│   ├── tables/           # 统计表格与质量报告
+│   └── figures/          # 研究图表
+├── docs/                 # 研究设计与阶段性记录
+└── logs/                 # 本地运行日志
+```
 
-Phase 1: Data infrastructure and quality validation.
+## 六、当前进度
 
-No profitability claim is made until the research and out-of-sample evaluation are completed.
+### 已完成
 
-## 7. Reproducibility
+- [x] 建立本地项目目录和 Git/GitHub 版本管理流程
+- [x] 配置 `.gitignore`，避免将本地行情数据和环境文件直接上传
+- [x] 建立 BaoStock 日线数据下载流程
+- [x] 下载 5 只沪深 A 股 2025 年日线行情作为流程验证样本
+- [x] 完成初步数据质量检查，包括重复记录、缺失价格、价格逻辑关系和日期覆盖
+- [x] 检查 5 只股票的日期集合是否一致
+- [x] 初步计算未复权收盘价收益率并检查极端收益
+- [x] 建立标准化行情数据处理流程
 
-The project will record dependency versions, data-source metadata, experiment parameters, and validation results.
+### 尚待完成
 
-Raw market data is excluded from the repository by default. Users must obtain data through permitted sources and follow the applicable data-provider terms.
+- [ ] 验证复权因子与正式收益率计算方法
+- [ ] 完善停牌、涨跌停、上市日期及交易状态检查
+- [ ] 构建 1、5、20 日信号及 1、2、5 日未来收益标签
+- [ ] 开展横截面分组和反转效应分析
+- [ ] 进行交易成本、市场状态和行业调整分析
+- [ ] 开展样本外测试与稳健性检验
+
+## 七、数据管理与复现
+
+原始行情数据默认保存在本地 `data/raw/`，标准化数据保存在 `data/processed/`。这些目录默认不纳入 Git 版本控制。
+
+代码、研究配置、数据质量报告和必要的研究文档可以根据需要提交至 GitHub。数据使用应遵守相应数据提供方的服务条款。
+
+运行环境依赖记录在 `requirements-lock.txt` 中。研究代码应尽量保持可重复执行，并逐步补充自动化测试和数据来源记录。
+
+## 八、阶段性结论
+
+截至当前阶段，项目已经完成小样本行情下载、初步数据质量检查和标准化处理流程的搭建。
+
+现阶段结果仅表明初步数据处理流程可以运行，**尚未证明 A 股市场存在短期反转效应，也没有形成经过完整回测验证的交易策略。**
+
+后续将扩大研究样本，完善收益率计算与交易约束处理，再开展正式的反转效应实证研究。
