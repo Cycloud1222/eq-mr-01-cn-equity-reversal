@@ -1,6 +1,4 @@
-
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -279,6 +277,10 @@ def format_summary_table(summary):
 
 def main():
     """执行数据检查、逐日分组、汇总统计和结果导出。"""
+
+    # 让 pandas 在终端输出时按中文全角字符计算列宽。
+    # 如果不开启，中文表头会被当成半角字符，表格列会错位、难以阅读。
+    pd.set_option("display.unicode.east_asian_width", True)
 
     if not INPUT_FILE.exists():
         raise FileNotFoundError(
