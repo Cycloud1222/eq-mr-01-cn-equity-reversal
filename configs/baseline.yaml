@@ -1,6 +1,6 @@
 project_id: EQ-MR-01
 market: CN_A_SHARE
-start_date: "2015-01-01"
+start_date: "2020-01-01"
 end_date: "2025-12-31"
 
 frequency: daily
@@ -8,6 +8,9 @@ signal_formation_days: [1, 5, 20]
 holding_days: [1, 2, 5]
 
 universe:
+  # 股票池来自沪深 300 与中证 500 成分接口，去重后 800 只，属于当前时点快照。
+  source: index_components
+  indices: ["hs300", "zz500"]
   exchanges: ["SH", "SZ"]
   exclude_etf: true
   exclude_fund: true
@@ -21,5 +24,6 @@ execution:
 
 data:
   primary_source: baostock
+  adjust: hfq
   preserve_raw: true
   timezone: Asia/Shanghai

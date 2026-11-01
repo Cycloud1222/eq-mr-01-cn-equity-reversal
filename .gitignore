@@ -28,12 +28,7 @@ data/private/
 # ==============================
 # Logs and temporary outputs
 # ==============================
-logs/
 *.log
-results/tmp/
-
-# 已废弃的跨日混池口径结果，仅本地保留，不进入版本库
-results/tables/reveral_summary.csv
 
 # ==============================
 # OS and editor files
