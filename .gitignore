@@ -26,6 +26,14 @@ data/processed/
 data/private/
 
 # ==============================
+# 手工导出的样本数据：保留本地，不进入版本库
+# ==============================
+results/tables/股票池清单.csv
+results/tables/股票池清单_紧凑版.txt
+results/tables/交易数据样例.csv
+results/tables/交易数据_样本5只_2020_2025.xlsx
+
+# ==============================
 # Logs and temporary outputs
 # ==============================
 *.log
