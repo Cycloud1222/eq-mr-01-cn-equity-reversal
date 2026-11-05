@@ -35,7 +35,10 @@ python src/build_signals.py
 # 6. 逐日横截面统计：两端 30%、五分组、分年度稳定性
 python src/evaluate_cross_section.py
 
-# 7. 测试
+# 7. HAC 稳健性检验（需先完成步骤 6 生成逐日明细）
+python src/evaluate_hac.py
+
+# 8. 测试
 python -m pytest tests -q
 ```
 
@@ -54,11 +57,11 @@ python -m pytest tests -q
 
 ## 当前状态
 
-已完成：800 只下载、后复权面板、复权校验（10 只抽样全部通过）、数据质量审计、信号重算、17 项测试、9 组逐日横截面统计、五分组单调性检查、分年度稳定性。
+已完成：800 只下载、后复权面板、复权校验、数据质量审计、信号重算、逐日横截面统计、五分组单调性检查及分年度稳定性。HAC 统计代码及独立测试已加入审查分支，GitHub 自动化测试已通过；HAC 的 27 行统计结果已根据本地输出归档。
 
-结果：在这份样本与口径下**没有发现短期反转**。9 组两端 30% 的 t 值在 -0.895 到 +0.199，五分组没有单调关系，分年度符号来回变化。
+结果：在当前样本与口径下**没有发现明确短期反转证据**。修复后的九组普通 t 值约在 -0.891 到 +0.192 之间；这些值仍需用 HAC 与其他稳健性检验复核。
 
-待完成：行业与市值中性化（唯一未排除的结构性解释）、HAC / 按日期聚类 Bootstrap、成本敏感性、严格样本外。完整结果见 [横截面检验报告](docs/reports/cross_section_2026-11-05.md)。
+待完成：完善历史动态股票池、行业与市值中性化、交易成本与严格样本外检验。已有横截面结果见 [横截面检验报告](docs/reports/cross_section_2026-11-05.md)；HAC 复核见 [HAC 检验结果报告](docs/reports/hac_results_2026-11-05.md)。
 
 ## 结论边界
 
@@ -70,7 +73,7 @@ python -m pytest tests -q
 
 1. 股票池是当前指数成分快照，样本期内退市或调出的股票不在其中，存在幸存者偏差。
 2. 样本期只有 2020–2025，且只覆盖大市值股票，不能外推到更早或更小市值的市场结构。
-3. 2 日、5 日持有期存在重叠，t 值未做 HAC 修正，只能看作上界。
+3. 2 日、5 日持有期存在重叠，原有普通 t 值未做 HAC 修正；它不是 HAC t 值的上界，不能预判修正方向。
 4. 涨跌停判定为近似规则，回测成交假设仍需细化。
 
 ## 文档
@@ -81,3 +84,24 @@ python -m pytest tests -q
 | [数据底座报告](docs/reports/data_base_2026-11-01.md) | 下载覆盖、复权校验、修复记录 |
 | [数据质量报告](docs/reports/data_quality_v2.md) | 按年覆盖、停牌、涨跌停 |
 | [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性、结论与限制 |
+
+## T2.3：HAC 稳健性检验
+
+主程序：`src/evaluate_hac.py`，读取上一阶段生成的 `results/tables/cross_section_daily_detail.csv`，对九组「形成期 × 评价期」依次报告三种 Newey–West/Bartlett 滞后阶数：`max(0, 持有期-1)`（主设定）、5、10。输出为 `results/tables/hac_robustness_summary.csv`（27 行、中文表头、保留数值列便于后续计算）。
+
+```powershell
+python src/evaluate_cross_section.py
+python src/evaluate_hac.py
+python -m pytest tests/test_hac.py -v
+python -m pytest tests -q
+```
+
+请先运行测试并核对主设定与滞后 5/10 阶的差异，再提交生成表。代码会拒绝有效区间**内部缺失**的收益差序列，防止错误压缩时间间隔；它允许样本开头形成期不足、结尾未来评价期不足的缺失。
+
+**统计边界：** HAC 只调整均值估计的标准误，不改变日均收益差，也不能修复幸存者偏差、遗漏未来收益的非随机选择、样本外验证缺失或不可交易约束。九个参数组合同时检验还需要控制多重比较。详情见 [HAC 方法说明](docs/reports/hac_methodology.md)。
+
+### HAC 实际结果归档
+
+已经根据本地完整逐日明细的输出归档 `results/tables/hac_robustness_summary.csv`（27 行）。全部 27 组的双侧 p 值均大于 0.05，95% HAC 置信区间均包含零；九组主设定中最小双侧 p 值约 0.373。该结果不支持当前样本存在稳健的非零平均短期反转收益差，但不证明其他股票池或其他市场环境不存在反转。
+
+[查看完整 HAC 数值与研究边界](docs/reports/hac_results_2026-11-05.md)。合并此分支之前仍需审查最新 CI 状态以及本地执行日志。
