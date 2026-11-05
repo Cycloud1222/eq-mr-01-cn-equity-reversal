@@ -36,9 +36,11 @@ INDEX_APIS = {
 # 不枚举过窄的板块前缀，以免把新的 A 股代码段漏掉。
 A_SHARE_PATTERN = r"^(?:sh\.6\d{5}|sz\.[03]\d{5})$"
 
+EXPECTED_COUNTS = {"沪深300": 300, "中证500": 500}
+
 SNAPSHOT_COLUMNS = [
     "查询日期", "指数", "股票代码", "股票名称", "数据更新日期",
-    "快照滞后天数", "数据来源", "获取方式",
+    "快照滞后天数", "数据来源", "获取方式", "审核状态", "需复核原因",
 ]
 
 
@@ -58,6 +60,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-staleness-days", type=int, default=35,
         help="接口数据更新日距离查询日超过此日数就报错，不静默采用旧快照",
+    )
+    parser.add_argument(
+        "--audit-only", action="store_true",
+        help=(
+            "审计采集模式：过旧快照不再立即中止，但逐条标记需复核；"
+            "数据仅供审计，不得直接用于正式回测"
+        ),
     )
     return parser.parse_args()
 
@@ -124,8 +133,9 @@ def validate_snapshot(
     query_date: str,
     max_staleness_days: int,
     source_kind: str,
+    audit_only: bool = False,
 ) -> pd.DataFrame:
-    """把一次指数接口结果标准化，并拒绝时点错误或过旧的数据。
+    """把一次历史指数接口结果标准化，审计模式保留并标注异常。
 
     参数：
         raw_frame：BaoStock 返回的原始成分表。
@@ -174,11 +184,23 @@ def validate_snapshot(
         raise ValueError(
             f"{index_name} 在 {query_date} 查询却返回未来更新的快照，禁止用于历史回测"
         )
+    issues: list[str] = []
     if (ages > max_staleness_days).any():
-        raise ValueError(
-            f"{index_name} 在 {query_date} 返回了过旧快照，最大滞后"
-            f" {int(ages.max())} 天，超过阈值 {max_staleness_days} 天"
+        issue = (
+            f"更新日期过旧：最大滞后 {int(ages.max())} 天，"
+            f"超过阈值 {max_staleness_days} 天"
         )
+        if not audit_only:
+            raise ValueError(f"{index_name} 在 {query_date} 返回了过旧快照，{issue}")
+        issues.append(issue)
+
+    expected_count = EXPECTED_COUNTS[index_name]
+    if len(raw) != expected_count:
+        # 不能在采集阶段擅自补齐或删掉成员；不完整快照留给人工核对。
+        issues.append(f"成分数量异常：返回 {len(raw)} 只，预期 {expected_count} 只")
+
+    review_status = "需复核" if issues else "通过基础检查（待生效日核验）"
+    review_reason = "；".join(issues)
 
     return pd.DataFrame({
         "查询日期": query_stamp.strftime("%Y-%m-%d"),
@@ -189,11 +211,14 @@ def validate_snapshot(
         "快照滞后天数": ages.to_numpy(),
         "数据来源": "BaoStock",
         "获取方式": source_kind,
+        "审核状态": review_status,
+        "需复核原因": review_reason,
     }, columns=SNAPSHOT_COLUMNS)
 
 
 def get_snapshot(
-    index_name: str, query_date: str, max_staleness_days: int
+    index_name: str, query_date: str, max_staleness_days: int,
+    audit_only: bool = False,
 ) -> pd.DataFrame:
     """按历史日期查询接口；缓存原始字段，重跑时可以复用。"""
     path = CACHE_DIR / f"{query_date}_{'hs300' if index_name == '沪深300' else 'zz500'}.csv"
@@ -207,13 +232,17 @@ def get_snapshot(
         raw = fetch_result(query_function(date=query_date), api_name)
 
         # 先校验再缓存：不能让错误日期或空快照进入本地数据底座。
-        validate_snapshot(raw, index_name, query_date, max_staleness_days, "网络接口")
+        validate_snapshot(
+            raw, index_name, query_date, max_staleness_days,
+            "网络接口", audit_only=audit_only,
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         raw.to_csv(path, index=False, encoding="utf-8-sig")
         source_kind = "网络接口"
 
     return validate_snapshot(
-        raw, index_name, query_date, max_staleness_days, source_kind
+        raw, index_name, query_date, max_staleness_days,
+        source_kind, audit_only=audit_only,
     )
 
 
@@ -225,6 +254,8 @@ def audit_snapshots(snapshots: pd.DataFrame) -> pd.DataFrame:
         最早数据更新日=("数据更新日期", "min"),
         最晚数据更新日=("数据更新日期", "max"),
         最大快照滞后天数=("快照滞后天数", "max"),
+        审核状态=("审核状态", "first"),
+        需复核原因=("需复核原因", "first"),
     )
     return audit.sort_values(keys).reset_index(drop=True)
 
@@ -255,11 +286,15 @@ def main() -> None:
         snapshots = []
         for date in query_dates:
             for index_name in INDEX_APIS:
-                frame = get_snapshot(index_name, date, args.max_staleness_days)
+                frame = get_snapshot(
+                    index_name, date, args.max_staleness_days,
+                    audit_only=args.audit_only,
+                )
                 snapshots.append(frame)
                 print(
                     f"历史快照：{date} {index_name}，{len(frame)} 只，"
-                    f"实际更新日最早 {frame['数据更新日期'].min()}"
+                    f"实际更新日最早 {frame['数据更新日期'].min()}，"
+                    f"审核状态：{frame['审核状态'].iloc[0]}"
                 )
     finally:
         bs.logout()
@@ -280,6 +315,10 @@ def main() -> None:
     print(f"审计汇总保存：{audit_path}")
     print(f"采集日期数：{len(query_dates)}；总记录数：{len(full):,}")
     print(audit.to_string(index=False))
+    issues = audit.loc[audit["审核状态"] == "需复核"]
+    if len(issues):
+        print(f"\n警告：{len(issues)} 个快照需人工复核，不能直接用于回测。")
+        print(issues.to_string(index=False))
     print(
         "\n警告：这是所查询日期的历史指数快照，不是完整的每日动态股票池。"
         "月度、周度查询不能直接为期间内每一天补写指数成员资格。"

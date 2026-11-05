@@ -20,7 +20,7 @@ jobs:
       - name: 安装测试所需依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install numpy pandas scipy statsmodels pytest
+          python -m pip install numpy pandas scipy statsmodels baostock pytest
 
       - name: 运行测试（没有本地行情时数据测试会跳过）
         run: python -m pytest tests -q

@@ -106,3 +106,53 @@ def test_audit_snapshots_separates_query_date_and_update_date() -> None:
     assert audit["成分股数"].eq(3).all()
     assert audit["最大快照滞后天数"].eq(7).all()
     assert audit["最早数据更新日"].eq("2020-01-24").all()
+
+
+def test_audit_mode_preserves_stale_snapshot_but_marks_unverified() -> None:
+    """2021-12-31 更新日 2021-11-15，超过 35 天时保留快照供审计。"""
+    raw = pd.DataFrame({
+        "updateDate": ["2021-11-15"] * 300,
+        "code": [f"sh.{600000 + i}" for i in range(300)],
+        "code_name": [f"模拟股票{i}" for i in range(300)],
+    })
+    with pytest.raises(ValueError, match="过旧"):
+        validate_snapshot(
+            raw, "沪深300", "2021-12-31", 35, "网络接口"
+        )
+
+    result = validate_snapshot(
+        raw, "沪深300", "2021-12-31", 35, "网络接口",
+        audit_only=True,
+    )
+    assert len(result) == 300
+    assert result["审核状态"].eq("需复核").all()
+    assert result["快照滞后天数"].eq(46).all()
+    assert result["需复核原因"].str.contains("46 天").all()
+
+    audit = audit_snapshots(result)
+    assert len(audit) == 1
+    assert audit.loc[0, "审核状态"] == "需复核"
+
+
+def test_missing_one_constituent_gets_flagged() -> None:
+    """中证500意外只返回499只时不删除数据，也不认为已验证完毕。"""
+    raw = pd.DataFrame({
+        "updateDate": ["2021-09-27"] * 499,
+        "code": [f"sh.{600000 + i}" for i in range(499)],
+        "code_name": [f"模拟股票{i}" for i in range(499)],
+    })
+    result = validate_snapshot(
+        raw, "中证500", "2021-09-30", 35, "网络接口",
+    )
+    assert len(result) == 499
+    assert result["审核状态"].eq("需复核").all()
+    assert result["需复核原因"].str.contains("499").all()
+
+
+def test_future_update_still_rejected_in_audit_mode() -> None:
+    """审计模式也不能允许明确晚于历史查询日的数据。"""
+    with pytest.raises(ValueError, match="未来"):
+        validate_snapshot(
+            sample_snapshot("2020-02-03"), "沪深300",
+            "2020-01-31", 35, "网络接口", audit_only=True,
+        )
