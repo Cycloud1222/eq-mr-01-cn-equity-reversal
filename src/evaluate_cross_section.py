@@ -9,6 +9,7 @@
 
 输出：
     results/tables/cross_section_summary.csv    9 组参数的两端 30% 统计表
+    results/tables/cross_section_daily_detail.csv 逐日股票数、标签覆盖率与收益差
     results/tables/quantile_summary.csv         45 行五分组明细（Q1 最低，Q5 最高）
     results/tables/quantile_monotonicity.csv    9 组参数的单调性汇总
     results/tables/subsample_stability.csv      分年度稳定性（2 组关键参数）
@@ -16,11 +17,11 @@
 口径（2026-11-04）：
 1. 每个交易日单独分组，禁止把不同日期的股票混在一起排序。
    混池会让少数极端行情日主导分位，还会把横截面相关当成独立样本。
-2. 两端分组：组内按过去收益升序排名，最低 30% 为空头组，最高 30% 为多头组；
+2. 两端分组：按过去收益升序排名，最低 30% 为过去输家组，最高 30% 为过去赢家组；
    五分组：同一天按 20% 切成 Q1（最低）到 Q5（最高）。
 3. 当日收益差 = 空头组未来收益均值 − 多头组未来收益均值，反转成立时为正。
-4. 当天信号或未来收益缺失的股票先剔除；剩余股票少于 30 只则整天跳过，
-   因为小样本的分位边界不稳定，结论只能算探索。
+4. 形成日只用过去收益做排序，未来收益仅评价已形成的组，不能因为标签缺失补选股票。
+   形成期信号不足 30 只的日期跳过；未来标签缺失另行记录覆盖率及无法评价的日期。
 5. t 值用“每日收益差”的时间序列计算：均值 /（标准差 / √有效天数）。
    不能把每天所有股票堆在一起算，那会把横截面相关误当成独立样本，t 值虚高。
 6. 分年度稳定性按信号日期归属自然年切分。12 月下旬的信号，其未来收益可能落在下一年，
@@ -41,6 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INPUT_FILE = PROJECT_ROOT / "data" / "processed" / "reversal_signals.parquet"
 RESULT_DIR = PROJECT_ROOT / "results" / "tables"
 SUMMARY_FILE = RESULT_DIR / "cross_section_summary.csv"
+DAILY_DETAIL_FILE = RESULT_DIR / "cross_section_daily_detail.csv"
 QUINTILE_FILE = RESULT_DIR / "quantile_summary.csv"
 MONOTONICITY_FILE = RESULT_DIR / "quantile_monotonicity.csv"
 SUBSAMPLE_FILE = RESULT_DIR / "subsample_stability.csv"
@@ -110,36 +112,97 @@ def prepare_sample(
     formation: int,
     horizon: int,
 ) -> tuple[pd.DataFrame, int]:
-    """构造某一组参数的逐日可用样本，并给出当天的横截面排名。
+    """使用形成日已经知道的信号建立横截面，不能利用未来标签选择股票。
 
-    参数：
-        panel: 信号面板。
-        formation: 形成期天数，用于取排序信号列。
-        horizon: 持有期天数，用于取未来收益标签列。
+    关键时间顺序：
+        1. 在 t 日只能根据 past_*d 确定股票及排名；
+        2. future_*d 是 t 日之后才知道的评价标签，缺失也不得使其他股票补位；
+        3. 收益率并列时采用平均秩，不因代码顺序任意拆分同值股票。
+
     返回：
-        (样本表, 被跳过的交易日数)。样本表含 date、code、排名分位三列左右的中间结果。
-
-    做法：
-        1. 只保留信号与未来收益都非空的记录；
-        2. 统计每日样本数，少于下限的日期整体剔除；
-        3. 每天独立按过去收益升序排名，得到 0 到 1 的分位。
+        (已形成的横截面, 因形成日信号不足而跳过的交易日数)。
+        未来标签缺失产生的额外跳过日由评价函数单独统计。
     """
+    past_column = f"past_{formation}d"
+    future_column = f"future_{horizon}d"
+    sample = panel[["date", "code", past_column, future_column]].copy()
 
+    # 将无穷大视为缺失，避免异常收益把股票推到分位两端。
+    # 排名只剔除形成期信号缺失，不能预先剔除未来收益缺失的股票。
+    for column in (past_column, future_column):
+        sample[column] = pd.to_numeric(
+            sample[column], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan)
+
+    sample = sample.dropna(subset=[past_column]).copy()
+    daily_count = sample.groupby("date")[past_column].size()
+    keep_dates = daily_count[daily_count >= MIN_STOCKS_PER_DAY].index
+    skipped_days = int(panel["date"].nunique() - len(keep_dates))
+    sample = sample.loc[sample["date"].isin(keep_dates)].copy()
+
+    # 使用平均秩保持同信号股票的分位一致；并列密集时可能出现空组，
+    # 评价阶段将其视为无有效分组日期，而不是人为拆散并列股票。
+    sample["rank_pct"] = sample.groupby("date")[past_column].rank(
+        pct=True, method="average"
+    )
+    return sample, skipped_days
+
+
+def daily_spread_details(
+    panel: pd.DataFrame,
+    formation: int,
+    horizon: int,
+) -> pd.DataFrame:
+    """保存每个信号日的固定分组与未来标签覆盖情况。
+
+    不根据未来收益重新排名。缺失的未来标签不会触发补选其他股票，
+    而是作为覆盖缺口记录下来；仅对可观察标签计算探索性组均值。
+    因为存在不可观察的持有结果，该收益差不等于可执行策略收益。
+    """
+    sample, _ = prepare_sample(panel, formation, horizon)
     past_column = f"past_{formation}d"
     future_column = f"future_{horizon}d"
 
-    # 两列任一缺失都不要：缺未来收益无法计算，缺信号无法排序
-    sample = panel[["date", "code", past_column, future_column]].dropna().copy()
+    # 以原始所有信号日期为索引，确保整日无信号或无未来收益的日期
+    # 也能在明细中留下记录，不会被 groupby 悄悄丢失。
+    dates = pd.Index(panel["date"].dropna().unique(), name="date")
+    details = pd.DataFrame(index=dates).sort_index()
+    details["形成期"] = formation
+    details["持有期"] = horizon
 
-    daily_count = sample.groupby("date")[past_column].size()
-    skipped_days = int((daily_count < MIN_STOCKS_PER_DAY).sum())
-    keep_dates = daily_count[daily_count >= MIN_STOCKS_PER_DAY].index
-    sample = sample[sample["date"].isin(keep_dates)]
+    valid_signal = pd.to_numeric(
+        panel[past_column], errors="coerce"
+    ).replace([np.inf, -np.inf], np.nan).notna()
+    details["有效信号股票数"] = (
+        panel.loc[valid_signal].groupby("date").size()
+    ).reindex(details.index, fill_value=0)
 
-    # 每天独立排名：groupby("date") 保证分位只在同一天内比较；
-    # method="first" 让同值按出现顺序断开，避免并列把分组边界撑宽。
-    sample["rank_pct"] = sample.groupby("date")[past_column].rank(pct=True, method="first")
-    return sample, skipped_days
+    loser = sample.loc[sample["rank_pct"] <= LOWER_QUANTILE]
+    winner = sample.loc[sample["rank_pct"] > UPPER_QUANTILE]
+
+    for group_name, group in (("输家组", loser), ("赢家组", winner)):
+        stats = group.groupby("date")[future_column].agg(["size", "count", "mean"])
+        stats = stats.rename(columns={
+            "size": f"{group_name}股票数",
+            "count": f"{group_name}有效标签数",
+            "mean": f"{group_name}未来平均收益",
+        })
+        details = details.join(stats)
+
+        # 没选出任何股票时记为 0，不能将空组误认为 100% 标签覆盖。
+        count_column = f"{group_name}股票数"
+        label_column = f"{group_name}有效标签数"
+        coverage_column = f"{group_name}标签覆盖率"
+        details[count_column] = details[count_column].fillna(0).astype(int)
+        details[label_column] = details[label_column].fillna(0).astype(int)
+        details[coverage_column] = (
+            details[label_column] / details[count_column].replace(0, np.nan)
+        )
+
+    details["反转收益差"] = (
+        details["输家组未来平均收益"] - details["赢家组未来平均收益"]
+    )
+    return details
 
 
 def daily_spread(
@@ -147,38 +210,15 @@ def daily_spread(
     formation: int,
     horizon: int,
 ) -> tuple[pd.Series, int]:
-    """计算某一组参数下的每日反转收益差（两端 30% 分组）。
+    """计算逐日反转收益差，并统计所有无法评价的信号日期。
 
-    参数：
-        panel: 信号面板。
-        formation: 形成期天数，用于排序的信号列。
-        horizon: 持有期天数，用于计算未来收益的标签列。
-    返回：
-        (每日收益差序列, 被跳过的交易日数)。
-
-    做法：
-        在逐日排名的基础上取最低 30% 与最高 30%，
-        当日收益差 = 空头组均值 − 多头组均值。
+    跳过日包括：形成日信号不足、并列导致的空组，以及未来标签缺失
+    导致至少一组无法计算均值。分组成员在评价之前已经固定。
     """
-
-    future_column = f"future_{horizon}d"
-    sample, skipped_days = prepare_sample(panel, formation, horizon)
-    rank = sample["rank_pct"]
-
-    # where 把不属于该组的股票置为缺失，随后按日均值自动忽略缺失
-    loser_return = sample[future_column].where(rank <= LOWER_QUANTILE)
-    winner_return = sample[future_column].where(rank > UPPER_QUANTILE)
-
-    grouped = pd.DataFrame({
-        "date": sample["date"],
-        "空头组未来收益": loser_return,
-        "多头组未来收益": winner_return,
-    }).groupby("date").mean()
-
-    spread = grouped["空头组未来收益"] - grouped["多头组未来收益"]
-
-    # 正常情况下有效日期都有两端分组；留 dropna 兜底，防止空组产生 NaN 混进 t 值
-    return spread.dropna(), skipped_days
+    details = daily_spread_details(panel, formation, horizon)
+    spread = details["反转收益差"].dropna()
+    skipped_days = int(details["反转收益差"].isna().sum())
+    return spread, skipped_days
 
 
 def daily_quintile_returns(
@@ -186,24 +226,16 @@ def daily_quintile_returns(
     formation: int,
     horizon: int,
 ) -> tuple[pd.DataFrame, int]:
-    """计算某一组参数下每日 Q1 到 Q5 的未来收益均值。
+    """逐日划分五组，且仅比较五组未来收益都有值的信号日期。
 
-    参数：
-        panel: 信号面板。
-        formation: 形成期天数。
-        horizon: 持有期天数。
-    返回：
-        (宽表, 被跳过的交易日数)。宽表以日期为索引，列为 Q1（过去收益最低）到 Q5（最高）。
-
-    做法：
-        把每日分位排名乘以组数后向上取整，得到 1..5 的组号。
-        rank 为 1.0 的股票落在第 5 组；由于用的是 method="first"，各组约各占 20%。
+    分组严格依据形成期排名；并列信号使用相同的平均秩。
+    组内缺失未来标签不触发重新分组，但组均值只来自有效标签，
+    这一评价样本的覆盖风险需在下一阶段进行敏感性分析。
     """
-
     future_column = f"future_{horizon}d"
-    sample, skipped_days = prepare_sample(panel, formation, horizon)
+    sample, _ = prepare_sample(panel, formation, horizon)
 
-    # ceil 之后做裁剪，防止浮点误差把 rank=1.0 映射到 6
+    # 使用平均秩时，同信号股票永远进入相同分组，但某组可能没有股票。
     group_id = np.ceil(sample["rank_pct"] * QUANTILE_GROUPS)
     group_id = group_id.clip(1, QUANTILE_GROUPS).astype(int)
 
@@ -214,7 +246,13 @@ def daily_quintile_returns(
         .unstack("分组")
         .reindex(columns=range(1, QUANTILE_GROUPS + 1))
     )
-    wide.columns = [f"Q{int(group)}" for group in wide.columns]
+    columns = [f"Q{index}" for index in range(1, QUANTILE_GROUPS + 1)]
+    wide.columns = columns
+
+    # 不同五分组必须在同一日期进行配对比较；缺组或整组无未来标签时
+    # 该日不参与任何一组的均值，避免组间比较使用了不同的日期集合。
+    wide = wide.dropna(subset=columns)
+    skipped_days = int(panel["date"].nunique() - len(wide))
     return wide, skipped_days
 
 
@@ -258,8 +296,9 @@ def summarize_spread(
 
     说明：
         t 值的分母用“每日收益差的标准差 / √有效天数”，即对时间序列做单样本检验。
-        这里尚未修正持有期重叠（2 日、5 日持有期的样本自相关），
-        得到的 t 值只能看作上界，后续需用 HAC 或按日期聚类 Bootstrap 复核。
+        这里尚未修正持有期重叠（2 日、5 日的序列相关）。
+        普通 t 值不一定是 HAC 修正结果的上界：序列相关也可能为负，
+        必须另行计算 HAC 标准误，不能根据此数值直接判断显著性。
     """
 
     valid_days, mean_spread, std_spread, t_value = mean_std_t(spread)
@@ -411,13 +450,17 @@ def main() -> None:
     )
 
     spread_rows = []
+    daily_detail_rows = []
     quintile_rows = []
     monotonicity_rows = []
 
     for formation in FORMATION_DAYS:
         for horizon in FORWARD_DAYS:
-            spread, skipped_days = daily_spread(panel, formation, horizon)
+            details = daily_spread_details(panel, formation, horizon)
+            spread = details["反转收益差"].dropna()
+            skipped_days = int(details["反转收益差"].isna().sum())
             spread_rows.append(summarize_spread(spread, skipped_days, formation, horizon))
+            daily_detail_rows.append(details.reset_index().rename(columns={"date": "交易日期"}))
 
             wide, skipped_days = daily_quintile_returns(panel, formation, horizon)
             for label in wide.columns:
@@ -443,12 +486,14 @@ def main() -> None:
             })
 
     summary = pd.DataFrame(spread_rows)
+    daily_detail = pd.concat(daily_detail_rows, ignore_index=True)
     quintile_summary = pd.DataFrame(quintile_rows)
     monotonicity = pd.DataFrame(monotonicity_rows)
     stability = pd.DataFrame(stability_rows)
 
     # 统一按 6 位小数落盘，避免 1e-06 这类科学计数法出现在报告表里
     summary.to_csv(SUMMARY_FILE, index=False, encoding="utf-8-sig", float_format="%.6f")
+    daily_detail.to_csv(DAILY_DETAIL_FILE, index=False, encoding="utf-8-sig", float_format="%.6f")
     quintile_summary.to_csv(
         QUINTILE_FILE, index=False, encoding="utf-8-sig", float_format="%.6f"
     )
@@ -475,6 +520,7 @@ def main() -> None:
     print(stability.to_string(index=False))
 
     print(f"\n两端统计表已保存：{SUMMARY_FILE}")
+    print(f"逐日覆盖明细已保存：{DAILY_DETAIL_FILE}")
     print(f"五分组明细已保存：{QUINTILE_FILE}")
     print(f"单调性汇总已保存：{MONOTONICITY_FILE}")
     print(f"分年度稳定性已保存：{SUBSAMPLE_FILE}")
