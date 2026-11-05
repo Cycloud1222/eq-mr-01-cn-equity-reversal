@@ -19,8 +19,9 @@
 2. 两端分组：组内按过去收益升序排名，最低 30% 为空头组，最高 30% 为多头组；
    五分组：同一天按 20% 切成 Q1（最低）到 Q5（最高）。
 3. 当日收益差 = 空头组未来收益均值 − 多头组未来收益均值，反转成立时为正。
-4. 当天信号或未来收益缺失的股票先剔除；剩余股票少于 30 只则整天跳过，
-   因为小样本的分位边界不稳定，结论只能算探索。
+4. 形成日只按非空过去收益筛选和排序，不得通过未来标签决定分组成员。
+   排序样本少于 30 只时跳过该日；分组后再用可观测未来收益计算组均值。
+   若某日存在空组则该日不计入有效统计，跳过天数按所有输入日期减有效日期统计。
 5. t 值用“每日收益差”的时间序列计算：均值 /（标准差 / √有效天数）。
    不能把每天所有股票堆在一起算，那会把横截面相关误当成独立样本，t 值虚高。
 6. 分年度稳定性按信号日期归属自然年切分。12 月下旬的信号，其未来收益可能落在下一年，
@@ -110,36 +111,37 @@ def prepare_sample(
     formation: int,
     horizon: int,
 ) -> tuple[pd.DataFrame, int]:
-    """构造某一组参数的逐日可用样本，并给出当天的横截面排名。
+    """在形成日按照过去收益排名，未来标签只能用于事后评价。
 
-    参数：
-        panel: 信号面板。
-        formation: 形成期天数，用于取排序信号列。
-        horizon: 持有期天数，用于取未来收益标签列。
     返回：
-        (样本表, 被跳过的交易日数)。样本表含 date、code、排名分位三列左右的中间结果。
+        (按过去收益完成横截面排名的样本, 形成日股票数不足 30 的天数)。
 
-    做法：
-        1. 只保留信号与未来收益都非空的记录；
-        2. 统计每日样本数，少于下限的日期整体剔除；
-        3. 每天独立按过去收益升序排名，得到 0 到 1 的分位。
+    研究约束：
+        绝不能先用 future_*d 的非空状态筛选再排名。否则，某只股票
+        能否在未来窗口完成交易，会改变形成日分位与组内股票集合。
+        缺失未来标签的记录仍保留排名，但在计算组均值时会被忽略。
     """
-
     past_column = f"past_{formation}d"
     future_column = f"future_{horizon}d"
 
-    # 两列任一缺失都不要：缺未来收益无法计算，缺信号无法排序
-    sample = panel[["date", "code", past_column, future_column]].dropna().copy()
+    # 用输入面板的全部交易日做分母，确保整天没有有效信号的日期也被计为跳过。
+    all_dates = panel["date"].dropna().unique()
+    sample = panel[["date", "code", past_column, future_column]].dropna(
+        subset=["date", "code", past_column]
+    ).copy()
 
+    # 相同信号的排序按股票代码固定，避免源文件行顺序影响分组。
+    # method="first" 会拆开并列值；这是当前研究保留的分组约定。
+    sample = sample.sort_values(["date", past_column, "code"], kind="stable")
     daily_count = sample.groupby("date")[past_column].size()
-    skipped_days = int((daily_count < MIN_STOCKS_PER_DAY).sum())
     keep_dates = daily_count[daily_count >= MIN_STOCKS_PER_DAY].index
-    sample = sample[sample["date"].isin(keep_dates)]
+    skipped_days = len(all_dates) - len(keep_dates)
+    sample = sample[sample["date"].isin(keep_dates)].copy()
 
-    # 每天独立排名：groupby("date") 保证分位只在同一天内比较；
-    # method="first" 让同值按出现顺序断开，避免并列把分组边界撑宽。
-    sample["rank_pct"] = sample.groupby("date")[past_column].rank(pct=True, method="first")
-    return sample, skipped_days
+    sample["rank_pct"] = sample.groupby("date")[past_column].rank(
+        pct=True, method="first"
+    )
+    return sample, int(skipped_days)
 
 
 def daily_spread(
@@ -177,8 +179,11 @@ def daily_spread(
 
     spread = grouped["空头组未来收益"] - grouped["多头组未来收益"]
 
-    # 正常情况下有效日期都有两端分组；留 dropna 兜底，防止空组产生 NaN 混进 t 值
-    return spread.dropna(), skipped_days
+    # 部分未来标签缺失时，某日可能只有一个组可评价；这类日期不能计入 t 检验。
+    # 以全体输入日期减去最终有效日期计算跳过数，覆盖所有缺失情形。
+    spread = spread.dropna()
+    skipped_days = panel["date"].nunique() - len(spread)
+    return spread, int(skipped_days)
 
 
 def daily_quintile_returns(
@@ -215,7 +220,10 @@ def daily_quintile_returns(
         .reindex(columns=range(1, QUANTILE_GROUPS + 1))
     )
     wide.columns = [f"Q{int(group)}" for group in wide.columns]
-    return wide, skipped_days
+    # 五分组必须当天五组全部有可观测未来收益，才构成完整横截面。
+    wide = wide.dropna(how="any")
+    skipped_days = panel["date"].nunique() - len(wide)
+    return wide, int(skipped_days)
 
 
 def mean_std_t(series: pd.Series) -> tuple[int, float, float, float]:
@@ -259,7 +267,8 @@ def summarize_spread(
     说明：
         t 值的分母用“每日收益差的标准差 / √有效天数”，即对时间序列做单样本检验。
         这里尚未修正持有期重叠（2 日、5 日持有期的样本自相关），
-        得到的 t 值只能看作上界，后续需用 HAC 或按日期聚类 Bootstrap 复核。
+        得到的 t 值不能视为显著性的上界；HAC 标准误可能更大也可能更小。
+        后续需用 HAC 或考虑时间依赖的 Bootstrap 复核。
     """
 
     valid_days, mean_spread, std_spread, t_value = mean_std_t(spread)
