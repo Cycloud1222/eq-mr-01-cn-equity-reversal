@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "src/collect_historical_index.py"
+      - "src/audit_historical_coverage.py"
       - "tests/test_historical_index.py"
+      - "tests/test_historical_coverage.py"
       - ".github/workflows/historical-index-tests.yml"
   workflow_dispatch:
 
@@ -27,4 +29,4 @@ jobs:
           python -m pip install pandas baostock pytest
 
       - name: 检查历史成分业务规则
-        run: python -m pytest tests/test_historical_index.py -v
+        run: python -m pytest tests/test_historical_index.py tests/test_historical_coverage.py -v
