@@ -78,7 +78,6 @@ python -m pytest tests -q
 | 文档 | 内容 |
 |---|---|
 | [PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) | 决策记录、研究口径、当前状态、技术债 |
-| [RESUME.md](docs/RESUME.md) | 简历 bullet 与面试素材 |
 | [数据底座报告](docs/reports/data_base_2026-11-01.md) | 下载覆盖、复权校验、修复记录 |
 | [数据质量报告](docs/reports/data_quality_v2.md) | 按年覆盖、停牌、涨跌停 |
 | [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性、结论与限制 |
