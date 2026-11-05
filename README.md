@@ -49,7 +49,7 @@ python -m pytest tests -q
 ├── src/                       主线脚本
 ├── tests/                     结构测试与未来函数测试
 ├── results/tables/            可追溯的结果表
-└── docs/                      项目记忆、简历素材、数据报告
+└── docs/                      项目记忆、数据报告
 ```
 
 ## 当前状态
