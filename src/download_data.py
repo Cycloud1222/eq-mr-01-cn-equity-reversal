@@ -9,7 +9,7 @@
 
     # 从股票池跑，指定区间
     python src/download_data.py --source universe --start-date 2015-01-01 --end-date 2025-12-31
-
+\n    # 按历史成分审计生成的缺口清单补齐行情\n    python src/download_data.py --source historical_missing --start-date 2020-01-01 --end-date 2025-12-31\n
 设计说明：
 1. 每只股票单独存 parquet，失败只影响一只，重跑不会重复下载。
 2. 下载日志逐只落盘，记录状态、行数、耗时、错误原因。
@@ -152,7 +152,8 @@ def load_missing_codes(path: Path) -> pd.DataFrame:
         )
         frame = frame.loc[needs_download].copy()
 
-    frame = frame.dropna(subset=["股票代码", "股票名称"]).copy()
+    if frame[["股票代码", "股票名称"]].isna().any().any():
+        raise ValueError("历史行情缺口清单存在空股票代码或股票名称")
     frame["股票代码"] = frame["股票代码"].astype("string").str.strip()
     valid_code = frame["股票代码"].str.fullmatch(r"(sh|sz)\.\d{6}", na=False)
     if not valid_code.all():
