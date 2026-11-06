@@ -39,6 +39,12 @@ RESULT_DIR = PROJECT_ROOT / "results" / "tables"
 
 LOG_FILE = MANIFEST_DIR / "download_log.csv"
 SUMMARY_FILE = RESULT_DIR / "download_summary.csv"
+DEFAULT_MISSING_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "待核查行情缺口_历史指数成分快照_monthly_2020-01-01_2025-12-31_全部.csv"
+)
 
 FIELDS = (
     "date,code,open,high,low,close,preclose,"
@@ -69,9 +75,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BaoStock 批量日线下载")
     parser.add_argument(
         "--source",
-        choices=["index800", "hs300", "zz500", "universe"],
+        choices=["index800", "hs300", "zz500", "universe", "historical_missing"],
         default="index800",
-        help="股票来源：指数成分或股票池",
+        help="股票来源：当前指数成分、股票池或历史缺口清单",
+    )
+    parser.add_argument(
+        "--missing-file",
+        type=Path,
+        default=DEFAULT_MISSING_FILE,
+        help="historical_missing 来源使用的待补行情 CSV 文件",
     )
     parser.add_argument("--start-date", default="2020-01-01")
     parser.add_argument("--end-date", default="2025-12-31")
@@ -116,8 +128,49 @@ def load_index_codes(query_func, source_name: str) -> pd.DataFrame:
     return frame[["股票代码", "股票名称", "数据源"]]
 
 
-def load_codes(source: str) -> pd.DataFrame:
+def load_missing_codes(path: Path) -> pd.DataFrame:
+    """读取历史行情缺口清单，保留代码字符串并去重。"""
+    if not path.exists():
+        raise FileNotFoundError(f"缺少历史行情缺口清单：{path}")
+
+    frame = pd.read_csv(
+        path,
+        encoding="utf-8-sig",
+        dtype={"股票代码": "string"},
+    )
+    required = {"股票代码", "股票名称"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"历史行情缺口清单缺少字段：{sorted(missing)}")
+    if frame.empty:
+        raise ValueError("历史行情缺口清单为空")
+
+    # 审计输出的缺口清单通常全是待补项；保留此过滤可防止误传代码并集文件。
+    if "待补行情文件" in frame.columns:
+        needs_download = frame["待补行情文件"].astype("string").str.lower().isin(
+            {"true", "1", "yes", "是"}
+        )
+        frame = frame.loc[needs_download].copy()
+
+    frame = frame.dropna(subset=["股票代码", "股票名称"]).copy()
+    frame["股票代码"] = frame["股票代码"].astype("string").str.strip()
+    valid_code = frame["股票代码"].str.fullmatch(r"(sh|sz)\\.\\d{6}", na=False)
+    if not valid_code.all():
+        invalid = frame.loc[~valid_code, "股票代码"].astype(str).tolist()[:10]
+        raise ValueError(f"历史行情缺口清单含无效股票代码：{invalid}")
+    if frame.empty:
+        raise ValueError("历史行情缺口清单中没有待补行情的有效股票")
+
+    frame = frame.drop_duplicates("股票代码").reset_index(drop=True)
+    frame["数据源"] = "historical_missing"
+    return frame[["股票代码", "股票名称", "数据源"]]
+
+
+def load_codes(source: str, missing_file: Path | None = None) -> pd.DataFrame:
     """按来源准备股票列表，统一去重。"""
+    if source == "historical_missing":
+        return load_missing_codes(missing_file or DEFAULT_MISSING_FILE)
+
     if source == "universe":
         universe = pd.read_csv(
             UNIVERSE_FILE,
@@ -208,15 +261,19 @@ def main() -> None:
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-    login_result = bs.login()
-    if login_result.error_code != "0":
-        raise RuntimeError(f"BaoStock 登录失败：{login_result.error_msg}")
+    if args.source == "historical_missing":
+        # 历史缺口清单是本地文件，不需要为读取股票列表调用 BaoStock。
+        codes = load_codes(args.source, args.missing_file)
+    else:
+        login_result = bs.login()
+        if login_result.error_code != "0":
+            raise RuntimeError(f"BaoStock 登录失败：{login_result.error_msg}")
 
-    try:
-        codes = load_codes(args.source)
-    finally:
-        # 指数成分查询完成后即可登出，下载阶段重新登录。
-        bs.logout()
+        try:
+            codes = load_codes(args.source, args.missing_file)
+        finally:
+            # 指数成分查询完成后即可登出，下载阶段重新登录。
+            bs.logout()
 
     codes = codes.sort_values("股票代码").reset_index(drop=True)
     if args.offset:
