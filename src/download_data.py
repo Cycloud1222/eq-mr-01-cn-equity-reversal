@@ -154,7 +154,7 @@ def load_missing_codes(path: Path) -> pd.DataFrame:
 
     frame = frame.dropna(subset=["股票代码", "股票名称"]).copy()
     frame["股票代码"] = frame["股票代码"].astype("string").str.strip()
-    valid_code = frame["股票代码"].str.fullmatch(r"(sh|sz)\\.\\d{6}", na=False)
+    valid_code = frame["股票代码"].str.fullmatch(r"(sh|sz)\.\d{6}", na=False)
     if not valid_code.all():
         invalid = frame.loc[~valid_code, "股票代码"].astype(str).tolist()[:10]
         raise ValueError(f"历史行情缺口清单含无效股票代码：{invalid}")
