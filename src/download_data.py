@@ -9,7 +9,10 @@
 
     # 从股票池跑，指定区间
     python src/download_data.py --source universe --start-date 2015-01-01 --end-date 2025-12-31
-\n    # 按历史成分审计生成的缺口清单补齐行情\n    python src/download_data.py --source historical_missing --start-date 2020-01-01 --end-date 2025-12-31\n
+
+    # 按历史成分审计生成的缺口清单补齐行情
+    python src/download_data.py --source historical_missing --start-date 2020-01-01 --end-date 2025-12-31
+
 设计说明：
 1. 每只股票单独存 parquet，失败只影响一只，重跑不会重复下载。
 2. 下载日志逐只落盘，记录状态、行数、耗时、错误原因。
