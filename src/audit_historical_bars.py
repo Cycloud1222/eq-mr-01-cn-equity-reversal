@@ -100,7 +100,11 @@ def load_snapshot_universe(path: Path) -> pd.DataFrame:
     )
 
 
-def normalize_calendar(calendar: pd.DataFrame) -> list[str]:
+def normalize_calendar(
+    calendar: pd.DataFrame,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[str]:
     required = {"calendar_date", "is_trading_day"}
     missing = required - set(calendar.columns)
     if missing:
@@ -115,6 +119,14 @@ def normalize_calendar(calendar: pd.DataFrame) -> list[str]:
     normalized = dates.dt.strftime("%Y-%m-%d")
     if normalized.duplicated().any():
         raise ValueError("交易日历存在重复日期")
+    if normalized.empty:
+        raise ValueError("交易日历为空")
+    calendar_start = pd.Timestamp(normalized.min())
+    calendar_end = pd.Timestamp(normalized.max())
+    if start_date and calendar_start > pd.Timestamp(start_date):
+        raise ValueError(f"交易日历起始日期 {calendar_start.date()} 晚于审计开始日期 {start_date}")
+    if end_date and calendar_end < pd.Timestamp(end_date):
+        raise ValueError(f"交易日历结束日期 {calendar_end.date()} 早于审计结束日期 {end_date}")
     return sorted(normalized.loc[status.eq("1")].tolist())
 
 
@@ -187,6 +199,8 @@ def audit_one_stock(
     start_date: str,
     end_date: str,
     download_status: str = "",
+    file_exists: bool | None = None,
+    read_error: str = "",
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
     """审核单只股票，返回股票汇总、缺失交易日和逐项异常。"""
     start = pd.Timestamp(start_date)
@@ -210,14 +224,16 @@ def audit_one_stock(
         expected_dates = []
         _issue(issues, code, name, "", "缺少上市日期元数据", "ipoDate", "", "无法严谨确定该股票应覆盖的交易日区间")
 
-    exists = frame is not None
+    exists = frame is not None if file_exists is None else file_exists
     data = frame.copy().reset_index(drop=True) if frame is not None else pd.DataFrame()
     row_count = len(data)
-    missing_columns = sorted(REQUIRED_BAR_COLUMNS - set(data.columns)) if exists else []
+    missing_columns = sorted(REQUIRED_BAR_COLUMNS - set(data.columns)) if frame is not None else []
+    if read_error:
+        _issue(issues, code, name, "", "行情文件读取失败", "parquet", read_error, "文件存在但无法读取；需检查文件损坏或 Parquet 引擎问题")
     for column in missing_columns:
         _issue(issues, code, name, "", "行情文件缺少字段", column, "", "无法完成该字段质量检查")
 
-    if exists and "date" in data.columns:
+    if frame is not None and "date" in data.columns:
         parsed_dates = pd.to_datetime(data["date"], errors="coerce")
         invalid_date_mask = parsed_dates.isna()
         for idx in data.index[invalid_date_mask]:
@@ -284,6 +300,20 @@ def audit_one_stock(
         normal_trade_null_cells += int(null_mask.sum())
         for idx in numeric.index[null_mask]:
             _issue(issues, code, name, str(numeric.at[idx, "_audit_date"] or ""), "正常交易日OHLCV空值", column, "", "tradestatus=1 时该字段应有有效值")
+
+    normal_trade_other_null_cells = 0
+    for column in ["preclose", "adjustflag", "pctChg", "isST"]:
+        if column not in numeric.columns:
+            continue
+        null_mask = normal_trade & numeric[column].isna()
+        normal_trade_other_null_cells += int(null_mask.sum())
+        for idx in numeric.index[null_mask]:
+            _issue(issues, code, name, str(numeric.at[idx, "_audit_date"] or ""), "正常交易日必需字段空值", column, "", "tradestatus=1 时该字段应有有效值")
+
+    if "preclose" in numeric.columns:
+        bad_preclose = normal_trade & numeric["preclose"].notna() & numeric["preclose"].le(0)
+        for idx in numeric.index[bad_preclose]:
+            _issue(issues, code, name, str(numeric.at[idx, "_audit_date"] or ""), "前收盘价非正", "preclose", numeric.at[idx, "preclose"], "正常交易日的前收盘价必须大于 0")
 
     for column in PRICE_COLUMNS:
         if column not in numeric.columns:
@@ -364,7 +394,7 @@ def audit_one_stock(
         conclusion = "样本期内无有效上市交易日"
     elif missing_dates:
         conclusion = "存在交易日缺口，需逐日核实"
-    elif duplicate_count or missing_columns or normal_trade_null_cells or non_adjusted or volume_amount_anomalies:
+    elif duplicate_count or missing_columns or normal_trade_null_cells or normal_trade_other_null_cells or non_adjusted or volume_amount_anomalies or read_error:
         conclusion = "日期覆盖完整，但存在行情质量异常"
     elif issues:
         conclusion = "日期覆盖完整，存在需人工复核项"
@@ -375,6 +405,8 @@ def audit_one_stock(
         "股票代码": code,
         "股票名称": name,
         "文件存在": exists,
+        "文件读取失败": bool(read_error),
+        "文件读取错误信息": read_error,
         "文件行数": row_count,
         "文件最早日期": valid_dates.min() if len(valid_dates) else "",
         "文件最晚日期": valid_dates.max() if len(valid_dates) else "",
@@ -385,11 +417,12 @@ def audit_one_stock(
         "缺失交易日数": missing_count,
         "交易日覆盖率": coverage,
         "日期重复行数": duplicate_count,
-        "日期解析失败行数": int(data["_audit_date"].isna().sum()) if exists else 0,
+        "日期解析失败行数": int(data["_audit_date"].isna().sum()) if frame is not None else 0,
         "非交易日记录数": non_trading_count,
         "行情文件缺失字段数": len(missing_columns),
         "OHLCV空值单元格数": ohlcv_null_cells,
         "正常交易日OHLCV空值单元格数": normal_trade_null_cells,
+        "正常交易日非OHLCV字段空值单元格数": normal_trade_other_null_cells,
         "非后复权记录数": non_adjusted,
         "成交量额异常数": volume_amount_anomalies,
         "极端涨跌幅复核数": extreme_return_count,
@@ -416,7 +449,14 @@ def audit_universe(
         code = str(row["股票代码"])
         name = str(row["股票名称"])
         path = raw_dir / f"{code}.parquet"
-        frame = pd.read_parquet(path) if path.is_file() else None
+        file_exists = path.is_file()
+        read_error = ""
+        frame = None
+        if file_exists:
+            try:
+                frame = pd.read_parquet(path)
+            except Exception as exc:
+                read_error = f"{type(exc).__name__}: {exc}"
         summary, missing, issues = audit_one_stock(
             code=code,
             name=name,
@@ -426,6 +466,8 @@ def audit_universe(
             start_date=start_date,
             end_date=end_date,
             download_status=statuses.get(code, ""),
+            file_exists=file_exists,
+            read_error=read_error,
         )
         summaries.append(summary)
         if not missing.empty:
@@ -458,6 +500,8 @@ def audit_universe(
         {"指标": "存在交易日缺口股票数", "数值": int(pd.to_numeric(detail["缺失交易日数"], errors="coerce").fillna(0).gt(0).sum())},
         {"指标": "重复日期行数", "数值": int(detail["日期重复行数"].sum())},
         {"指标": "正常交易日OHLCV空值单元格数", "数值": int(detail["正常交易日OHLCV空值单元格数"].sum())},
+        {"指标": "正常交易日非OHLCV字段空值单元格数", "数值": int(detail["正常交易日非OHLCV字段空值单元格数"].sum())},
+        {"指标": "Parquet读取失败文件数", "数值": int(detail["文件读取失败"].sum())},
         {"指标": "非后复权记录数", "数值": int(detail["非后复权记录数"].sum())},
         {"指标": "成交量额异常数", "数值": int(detail["成交量额异常数"].sum())},
         {"指标": "极端涨跌幅复核数", "数值": int(detail["极端涨跌幅复核数"].sum())},
@@ -486,7 +530,7 @@ def main() -> None:
             if args.stock_basic_file else fetched_basic
         )
 
-    trading_dates = normalize_calendar(calendar)
+    trading_dates = normalize_calendar(calendar, args.start_date, args.end_date)
     metadata_map = normalize_stock_basic(stock_basic)
     statuses = load_download_status(args.log)
     detail, missing, issues, global_summary = audit_universe(
