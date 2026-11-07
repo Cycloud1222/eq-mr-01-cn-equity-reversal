@@ -6,6 +6,7 @@ import pandas as pd
 
 from src.audit_historical_bars import (
     audit_one_stock,
+    audit_universe,
     normalize_calendar,
     normalize_stock_basic,
 )
@@ -132,3 +133,72 @@ def test_stock_basic_normalizes_open_ended_delisting_date() -> None:
     result = normalize_stock_basic(basic)
     assert result["sh.600000"]["ipo"] == pd.Timestamp("1999-11-10")
     assert pd.isna(result["sh.600000"]["out"])
+
+
+def test_calendar_rejects_a_range_that_does_not_cover_audit_window() -> None:
+    calendar = pd.DataFrame({
+        "calendar_date": ["2020-01-02", "2020-01-03"],
+        "is_trading_day": ["1", "1"],
+    })
+    try:
+        normalize_calendar(calendar, "2020-01-01", "2020-01-03")
+    except ValueError as exc:
+        assert "起始日期" in str(exc)
+    else:
+        raise AssertionError("不完整的交易日历应当被拒绝")
+
+
+def test_normal_trading_day_requires_preclose_adjustment_return_and_st_fields() -> None:
+    frame = make_bars([{
+        "preclose": None,
+        "adjustflag": None,
+        "pctChg": None,
+        "isST": None,
+    }])
+    metadata = {"ipo": pd.Timestamp("2019-01-01"), "out": pd.NaT}
+    summary, _, issues = audit_one_stock(
+        "sh.600000", "浦发银行", frame,
+        ["2020-01-02"], metadata, "2020-01-01", "2020-01-31",
+    )
+
+    assert summary["正常交易日非OHLCV字段空值单元格数"] == 4
+    assert "正常交易日必需字段空值" in set(issues["问题类型"])
+
+
+def test_unreadable_parquet_is_reported_without_aborting_universe(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "sh.600000.parquet"
+    path.write_bytes(b"not a parquet file")
+
+    def fail_read(_path):
+        raise ValueError("parquet footer is invalid")
+
+    monkeypatch.setattr(pd, "read_parquet", fail_read)
+    universe = pd.DataFrame([{
+        "股票代码": "sh.600000",
+        "股票名称": "浦发银行",
+    }])
+    metadata = {
+        "sh.600000": {
+            "ipo": pd.Timestamp("2019-01-01"),
+            "out": pd.NaT,
+        }
+    }
+    detail, missing, issues, global_summary = audit_universe(
+        universe=universe,
+        raw_dir=tmp_path,
+        trading_dates=["2020-01-02"],
+        metadata_map=metadata,
+        start_date="2020-01-01",
+        end_date="2020-01-31",
+    )
+
+    assert bool(detail.iloc[0]["文件存在"])
+    assert bool(detail.iloc[0]["文件读取失败"])
+    assert detail.iloc[0]["缺失交易日数"] == 1
+    assert missing["缺失交易日"].tolist() == ["2020-01-02"]
+    assert "行情文件读取失败" in set(issues["问题类型"])
+    assert global_summary.loc[
+        global_summary["指标"] == "Parquet读取失败文件数", "数值"
+    ].iloc[0] == 1
