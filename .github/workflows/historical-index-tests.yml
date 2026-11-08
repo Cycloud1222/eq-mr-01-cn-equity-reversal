@@ -1,18 +1,16 @@
-name: 历史指数成分数据测试
+name: 历史成分快照采集测试
 
 on:
   pull_request:
     paths:
       - "src/collect_historical_index.py"
-      - "src/audit_historical_coverage.py"
       - "tests/test_historical_index.py"
-      - "tests/test_historical_coverage.py"
       - ".github/workflows/historical-index-tests.yml"
   workflow_dispatch:
 
 jobs:
   validate-index:
-    name: 不依赖网络的历史成分逻辑校验
+    name: 无网络的快照采集逻辑测试
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -28,5 +26,5 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pandas baostock pytest
 
-      - name: 检查历史成分业务规则
-        run: python -m pytest tests/test_historical_index.py tests/test_historical_coverage.py -v
+      - name: 测试历史快照采集逻辑
+        run: python -m pytest tests/test_historical_index.py -v

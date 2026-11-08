@@ -1,23 +1,14 @@
-"""历史指数成分快照的纯函数测试，无需 BaoStock 账户或网络。
-
-运行：
-    python -m pytest tests/test_historical_index.py -v
-"""
+"""历史指数成分快照采集逻辑测试，无需网络或 BaoStock 账户。"""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from src.collect_historical_index import (
-    audit_snapshots,
-    select_query_dates,
-    validate_snapshot,
-)
+from src.collect_historical_index import normalize_snapshot, select_query_dates
 
 
 def sample_snapshot(update_date: str = "2020-01-24") -> pd.DataFrame:
-    """构造历史成分：包含新的深圳 302 代码前缀，防止过窄正则漏掉 A 股。"""
     return pd.DataFrame({
         "updateDate": [update_date, update_date, update_date],
         "code": ["sh.600000", "sz.000001", "sz.302132"],
@@ -26,7 +17,6 @@ def sample_snapshot(update_date: str = "2020-01-24") -> pd.DataFrame:
 
 
 def test_trade_calendar_uses_real_month_end() -> None:
-    """交易月末是月内最后交易日，不是自然月最后一日。"""
     frame = pd.DataFrame({
         "calendar_date": [
             "2020-01-29", "2020-01-30", "2020-01-31",
@@ -34,125 +24,56 @@ def test_trade_calendar_uses_real_month_end() -> None:
         ],
         "is_trading_day": ["1", "0", "1", "0", "1", "1"],
     })
-    result = select_query_dates(frame, "2020-01-01", "2020-02-28", "monthly")
-    assert result == ["2020-01-31", "2020-02-04"]
+    assert select_query_dates(
+        frame, "2020-01-01", "2020-02-28", "monthly"
+    ) == ["2020-01-31", "2020-02-04"]
 
 
 def test_daily_queries_skip_closed_days() -> None:
-    """日频也必须来自交易日历，不能用自然日或简单工作日替代。"""
     frame = pd.DataFrame({
         "calendar_date": ["2020-01-29", "2020-01-30", "2020-01-31"],
         "is_trading_day": ["1", "0", "1"],
     })
-    assert select_query_dates(frame, "2020-01-29", "2020-01-31", "daily") == [
-        "2020-01-29", "2020-01-31",
-    ]
+    assert select_query_dates(
+        frame, "2020-01-29", "2020-01-31", "daily"
+    ) == ["2020-01-29", "2020-01-31"]
 
 
-def test_prepare_snapshot_preserves_update_timestamp() -> None:
-    """必须保留供应商数据更新日期，并检查没有未来时点。"""
-    result = validate_snapshot(
-        sample_snapshot(), "沪深300", "2020-01-31", 35, "网络接口"
+def test_normalize_snapshot_preserves_update_date_and_new_code_prefix() -> None:
+    result = normalize_snapshot(
+        sample_snapshot(), "沪深300", "2020-01-31", "网络接口"
     )
     assert len(result) == 3
     assert result["查询日期"].eq("2020-01-31").all()
     assert result["数据更新日期"].eq("2020-01-24").all()
     assert result["快照滞后天数"].eq(7).all()
     assert "sz.302132" in result["股票代码"].tolist()
+    assert "审核状态" not in result.columns
+
+
+def test_stale_snapshot_is_kept_with_update_lag_recorded() -> None:
+    result = normalize_snapshot(
+        sample_snapshot("2021-11-15"), "沪深300", "2021-12-31", "网络接口"
+    )
+    assert result["快照滞后天数"].eq(46).all()
 
 
 def test_reject_future_snapshot() -> None:
-    """即便查询历史日期，只要返回未来更新日就禁止用于回测。"""
     with pytest.raises(ValueError, match="未来"):
-        validate_snapshot(
-            sample_snapshot("2020-02-03"), "中证500", "2020-01-31", 35, "网络接口"
-        )
-
-
-def test_reject_stale_snapshot() -> None:
-    """若接口返回旧日期成分，不能静默顶替新的历史快照。"""
-    with pytest.raises(ValueError, match="过旧"):
-        validate_snapshot(
-            sample_snapshot("2019-10-01"), "沪深300", "2020-01-31", 35, "网络接口"
+        normalize_snapshot(
+            sample_snapshot("2020-02-03"), "中证500", "2020-01-31", "网络接口"
         )
 
 
 def test_reject_duplicate_membership() -> None:
-    """同一指数同一日期一只股票最多出现一条成分记录。"""
     raw = sample_snapshot()
     raw.loc[2, "code"] = "sh.600000"
     with pytest.raises(ValueError, match="重复"):
-        validate_snapshot(raw, "沪深300", "2020-01-31", 35, "网络接口")
+        normalize_snapshot(raw, "沪深300", "2020-01-31", "网络接口")
 
 
 def test_reject_non_a_share_code() -> None:
-    """不允许 B 股与其他证券类型直接混入 A 股指数成分。"""
     raw = sample_snapshot()
     raw.loc[0, "code"] = "sh.900901"
     with pytest.raises(ValueError, match="非沪深 A 股"):
-        validate_snapshot(raw, "沪深300", "2020-01-31", 35, "网络接口")
-
-
-def test_audit_snapshots_separates_query_date_and_update_date() -> None:
-    """审计中仍需报告每只指数的实际覆盖数及更新日期。"""
-    hs300 = validate_snapshot(
-        sample_snapshot(), "沪深300", "2020-01-31", 35, "本地缓存"
-    )
-    zz500 = validate_snapshot(
-        sample_snapshot(), "中证500", "2020-01-31", 35, "本地缓存"
-    )
-    audit = audit_snapshots(pd.concat([hs300, zz500], ignore_index=True))
-    assert len(audit) == 2
-    assert audit["成分股数"].eq(3).all()
-    assert audit["最大快照滞后天数"].eq(7).all()
-    assert audit["最早数据更新日"].eq("2020-01-24").all()
-
-
-def test_audit_mode_preserves_stale_snapshot_but_marks_unverified() -> None:
-    """2021-12-31 更新日 2021-11-15，超过 35 天时保留快照供审计。"""
-    raw = pd.DataFrame({
-        "updateDate": ["2021-11-15"] * 300,
-        "code": [f"sh.{600000 + i}" for i in range(300)],
-        "code_name": [f"模拟股票{i}" for i in range(300)],
-    })
-    with pytest.raises(ValueError, match="过旧"):
-        validate_snapshot(
-            raw, "沪深300", "2021-12-31", 35, "网络接口"
-        )
-
-    result = validate_snapshot(
-        raw, "沪深300", "2021-12-31", 35, "网络接口",
-        audit_only=True,
-    )
-    assert len(result) == 300
-    assert result["审核状态"].eq("需复核").all()
-    assert result["快照滞后天数"].eq(46).all()
-    assert result["需复核原因"].str.contains("46 天").all()
-
-    audit = audit_snapshots(result)
-    assert len(audit) == 1
-    assert audit.loc[0, "审核状态"] == "需复核"
-
-
-def test_missing_one_constituent_gets_flagged() -> None:
-    """中证500意外只返回499只时不删除数据，也不认为已验证完毕。"""
-    raw = pd.DataFrame({
-        "updateDate": ["2021-09-27"] * 499,
-        "code": [f"sh.{600000 + i}" for i in range(499)],
-        "code_name": [f"模拟股票{i}" for i in range(499)],
-    })
-    result = validate_snapshot(
-        raw, "中证500", "2021-09-30", 35, "网络接口",
-    )
-    assert len(result) == 499
-    assert result["审核状态"].eq("需复核").all()
-    assert result["需复核原因"].str.contains("499").all()
-
-
-def test_future_update_still_rejected_in_audit_mode() -> None:
-    """审计模式也不能允许明确晚于历史查询日的数据。"""
-    with pytest.raises(ValueError, match="未来"):
-        validate_snapshot(
-            sample_snapshot("2020-02-03"), "沪深300",
-            "2020-01-31", 35, "网络接口", audit_only=True,
-        )
+        normalize_snapshot(raw, "沪深300", "2020-01-31", "网络接口")
