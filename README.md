@@ -14,30 +14,6 @@
 
 面板 1,086,970 行、1,455 个交易日。数据说明见 [数据底座报告](docs/reports/data_base_2026-11-01.md) 与 [数据质量报告](docs/reports/data_quality_v2.md)。
 
-## 历史成分行情补齐
-
-2020—2025 年沪深 300 与中证 500 的月末历史成分代码并集，应以历史快照审计结果为准，不能用当前指数成分替代。审计生成的「待核查行情缺口」CSV 可直接作为回补清单：
-
-```powershell
-python src/download_data.py --source historical_missing --missing-file "data/processed/待核查行情缺口_历史指数成分快照_monthly_2020-01-01_2025-12-31_全部.csv" --start-date 2020-01-01 --end-date 2025-12-31
-```
-
-该模式只读取 CSV 中「待补行情文件」为真的证券，按股票代码去重，逐只下载后复权日线；不再查询当前指数成分。已成功且本地 Parquet 文件存在的证券会自动跳过，中断后可重复执行同一命令续传。下载结果仍需检查「成功 / 无数据 / 失败」状态，再重建面板和信号。月末成分快照是历史动态股票池的近似，不等同于每日真实成分。
-
-## 历史成分日线完整性审计
-
-行情文件补齐后，不能只看 Parquet 是否存在。以下脚本会使用 BaoStock 交易日历与证券基本资料中的上市/退市日期，逐只检查历史成分在有效上市区间内的应有交易日，并检查重复日期、OHLCV 空值、价格逻辑、成交量/成交额、后复权标识和极端涨跌幅。
-
-```powershell
-python src/audit_historical_bars.py --snapshots "data/processed/历史指数成分快照_monthly_2020-01-01_2025-12-31_全部.csv" --start-date 2020-01-01 --end-date 2025-12-31
-```
-
-脚本默认在线获取交易日历和证券基本资料；也可用 `--calendar-file` 与 `--stock-basic-file` 指定本地 CSV 离线复核。输出四份 CSV：股票级日线覆盖、逐日缺失清单、异常明细、总体汇总。缺失交易日只表示本地文件没有该日记录；除非有独立停复牌记录佐证，不会自动归类为停牌。上市日期元数据缺失的股票会标记为“无法验证”，不会虚报 100% 覆盖。
-
-```powershell
-python -m pytest tests/test_historical_bars.py -q
-```
-
 ## 主流程
 
 ```powershell
