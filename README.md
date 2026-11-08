@@ -10,7 +10,7 @@
 | 样本期 | 2020-01-02 至 2025-12-31 |
 | 可用股票 | 799 只（1 只上市晚于区间，无数据） |
 | 频率 / 复权 | 日线 / 后复权 |
-| 数据源 | BaoStock |
+| 主行情数据源 | BaoStock |
 
 面板 1,086,970 行、1,455 个交易日。数据说明见 [数据底座报告](docs/reports/data_base_2026-11-01.md) 与 [数据质量报告](docs/reports/data_quality_v2.md)。
 
@@ -47,6 +47,7 @@ python -m pytest tests -q
 ```text
 ├── configs/baseline.yaml      研究参数
 ├── data/raw/baostock/         每只股票一个 parquet
+├── data/raw/neutralization/   行业快照与每日市值（本地数据，不进 Git）
 ├── data/processed/            面板与信号
 ├── data/manifests/            下载日志
 ├── src/                       主线脚本
@@ -62,6 +63,33 @@ python -m pytest tests -q
 结果：在当前样本与口径下**没有发现明确短期反转证据**。修复后的九组普通 t 值约在 -0.891 到 +0.192 之间；这些值仍需用 HAC 与其他稳健性检验复核。
 
 待完成：完善历史动态股票池、行业与市值中性化、交易成本与严格样本外检验。已有横截面结果见 [横截面检验报告](docs/reports/cross_section_2026-11-05.md)；HAC 复核见 [HAC 检验结果报告](docs/reports/hac_results_2026-11-05.md)。
+
+### 行业与市值中性化：数据准备
+
+无需 Tushare Pro。数据下载脚本使用两类免费来源：
+
+- 行业：BaoStock `query_stock_industry(date=...)`，按每周最后一个交易日请求历史分类，并保留接口返回的 `updateDate` 作为实际生效日期。
+- 规模：AKShare `stock_zh_a_hist_163`，读取每日总市值和流通市值；后续以 `log(流通市值)` 作为规模暴露变量。
+
+先用少量股票和周度快照试跑：
+
+```powershell
+python src/download_neutralization_data.py --limit 3 --industry-limit 3
+```
+
+确认接口可用后，下载全样本；脚本会复用已有缓存：
+
+```powershell
+python src/download_neutralization_data.py
+```
+
+若要重新获取数据：
+
+```powershell
+python src/download_neutralization_data.py --force
+```
+
+输出保存在 `data/raw/neutralization/`，不修改原始日线、信号面板或已有研究结果。行业分类按实际 `updateDate` 向前匹配，禁止把未来分类填回历史。市值来源为未复权历史行情中的每日市值字段，不用后复权收盘价乘当前股本。当前新增内容只负责数据采集；中性化计算与结果解释需在数据下载完成后进行。
 
 ## 结论边界
 
@@ -83,7 +111,7 @@ python -m pytest tests -q
 | [PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) | 决策记录、研究口径、当前状态、技术债 |
 | [数据底座报告](docs/reports/data_base_2026-11-01.md) | 下载覆盖、复权校验、修复记录 |
 | [数据质量报告](docs/reports/data_quality_v2.md) | 按年覆盖、停牌、涨跌停 |
-| [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性、结论与限制 |
+| [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性 |
 
 ## T2.3：HAC 稳健性检验
 
@@ -98,7 +126,7 @@ python -m pytest tests -q
 
 请先运行测试并核对主设定与滞后 5/10 阶的差异，再提交生成表。代码会拒绝有效区间**内部缺失**的收益差序列，防止错误压缩时间间隔；它允许样本开头形成期不足、结尾未来评价期不足的缺失。
 
-**统计边界：** HAC 只调整均值估计的标准误，不改变日均收益差，也不能修复幸存者偏差、遗漏未来收益的非随机选择、样本外验证缺失或不可交易约束。九个参数组合同时检验还需要控制多重比较。详情见 [HAC 方法说明](docs/reports/hac_methodology.md)。
+**统计边界：** HAC 只调整均值推断的标准误，不改变日均收益差，也不能修复幸存者偏差、遗漏未来收益的非随机选择、样本外验证缺失或不可交易约束。九个参数组合同时检验还需要控制多重比较。详情见 [HAC 方法说明](docs/reports/hac_methodology.md)。
 
 ### HAC 实际结果归档
 
