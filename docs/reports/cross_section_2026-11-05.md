@@ -1,5 +1,9 @@
 # 短期反转检验报告（2026-11-05）
 
+> **历史状态（2026-11-18）**：本报告及 `results/tables/cross_section_summary.csv` 等横截面表生成于 PR #2 之前，仍采用“先删未来收益缺失股票、再排序”的旧口径。当前代码已在 `288fc79` 修复，但本报告没有在修复后重跑。
+>
+> 因此本文数值只能作为**修复前历史输出**，不能与修复后的 HAC 表混引。请先阅读 [架构考古与历史包袱审计](../audits/2026-11-18-architecture-archaeology.md#8-结果血缘) 的结果血缘说明。
+
 > 任务：T2.2 逐日横截面统计
 > 数据：`data/processed/reversal_signals.parquet`，799 只、1,086,970 行、2020-01-02 至 2025-12-31
 > 代码：[evaluate_cross_section.py](../../src/evaluate_cross_section.py)

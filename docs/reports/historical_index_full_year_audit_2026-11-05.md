@@ -1,5 +1,7 @@
 # T3.1：2020 年全年历史指数成分与行情覆盖审计（2026-11-05）
 
+> **历史状态（2026-11-18）**：本文是 2020 年一次性覆盖审计的结果留档。PR #9 已删除 `audit_historical_coverage.py`、`audit_historical_bars.py`、一次性缺口补数入口和历史分支；文末旧命令不能直接运行。当前主线仍使用当前指数成分快照，本文结论只用于说明幸存者偏差，不构成新的历史动态股票池。
+
 > 口径：用户在本地按交易月末采集的 12 次历史成分快照。比较对象为两指数在各月末的成员并集、当前本地 BaoStock parquet 物理文件，以及原下载日志中“成功”的证券代码。**本报告不是 2020—2025 年完整历史股票池结论。**
 
 ## 一、输入与范围
@@ -81,19 +83,7 @@
 
 ## 六、建议的下一轮工作（不重复开发）
 
-先扩大至 **2020—2025 年共 72 个交易月末**，再用当前审计脚本计算全样本历史成员代码并集与行情缺口；等全区间名单稳定后再规划增量下载。
-
-```powershell
-git fetch origin
-git switch feature/historical-index-snapshots-20261105
-git pull --ff-only origin feature/historical-index-snapshots-20261105
-
-python src/collect_historical_index.py --frequency monthly --limit 0
-
-python src/audit_historical_coverage.py --snapshots "data/processed/历史指数成分快照_monthly_2020-01-01_2025-12-31_全部.csv"
-```
-
-优先提供新生成的**覆盖审计表和代码并集表**，不必先上传全部原始日线。
+先扩大至 **2020—2025 年共 72 个交易月末**，再重新实现或恢复覆盖审计流程，计算全样本历史成员代码并集与行情缺口；等全区间名单稳定后再规划增量下载。历史阶段的分支和覆盖审计脚本已在 PR #9 清理，不能按旧命令重跑。优先保留新生成的**覆盖审计表和代码并集表**，不必先上传全部原始日线。
 
 在确定完整名单后：
 
