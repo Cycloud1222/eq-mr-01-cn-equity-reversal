@@ -1,4 +1,4 @@
-"""T1.2 批量下载：指数成分或股票池 → 每只一个 parquet + 下载日志。
+"""T1.2 批量下载：指数成分 → 每只一个 parquet + 下载日志。
 
 用法：
     # 先小批量试跑
@@ -6,9 +6,6 @@
 
     # 正式跑 800 只
     python src/download_data.py --source index800 --start-date 2020-01-01
-
-    # 从股票池跑，指定区间
-    python src/download_data.py --source universe --start-date 2015-01-01 --end-date 2025-12-31
 
 设计说明：
 1. 每只股票单独存 parquet，失败只影响一只，重跑不会重复下载。
@@ -32,7 +29,6 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-UNIVERSE_FILE = PROJECT_ROOT / "data" / "manifests" / "沪深A股股票池.csv"
 RAW_DIR = PROJECT_ROOT / "data" / "raw" / "baostock"
 MANIFEST_DIR = PROJECT_ROOT / "data" / "manifests"
 RESULT_DIR = PROJECT_ROOT / "results" / "tables"
@@ -69,9 +65,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BaoStock 批量日线下载")
     parser.add_argument(
         "--source",
-        choices=["index800", "hs300", "zz500", "universe"],
+        choices=["index800", "hs300", "zz500"],
         default="index800",
-        help="股票来源：当前指数成分或本地股票池",
+        help="股票来源：当前指数成分",
     )
     parser.add_argument("--start-date", default="2020-01-01")
     parser.add_argument("--end-date", default="2025-12-31")
@@ -118,21 +114,14 @@ def load_index_codes(query_func, source_name: str) -> pd.DataFrame:
 
 def load_codes(source: str) -> pd.DataFrame:
     """按来源准备股票列表，统一去重。"""
-    if source == "universe":
-        universe = pd.read_csv(
-            UNIVERSE_FILE,
-            encoding="utf-8-sig",
-            dtype={"股票代码": "string"},
-        )
-        universe = universe[universe["参考日交易状态"] == "正常交易"].copy()
-        universe["数据源"] = "universe"
-        return universe[["股票代码", "股票名称", "数据源"]]
-
     if source == "hs300":
         return load_index_codes(bs.query_hs300_stocks, "hs300")
 
     if source == "zz500":
         return load_index_codes(bs.query_zz500_stocks, "zz500")
+
+    if source != "index800":
+        raise ValueError(f"不支持的股票来源：{source}")
 
     hs300 = load_index_codes(bs.query_hs300_stocks, "hs300")
     zz500 = load_index_codes(bs.query_zz500_stocks, "zz500")

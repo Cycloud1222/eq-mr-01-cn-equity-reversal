@@ -1,6 +1,6 @@
 # A 股短期反转效应研究（EQ-MR-01）
 
-用后复权日线检验 A 股是否存在可交易的短期反转效应：形成期 1/5/20 日，持有期 1/2/5 日，逐日横截面分组，最后看扣掉成本后还剩多少。
+用后复权日线检验 A 股是否存在短期反转效应：形成期 1/5/20 日，持有期 1/2/5 日，逐日横截面分组。当前阶段评价的是研究性收益差；交易成本、可成交约束和严格样本外仍未实现。
 
 ## 数据
 
@@ -45,7 +45,7 @@ python -m pytest tests -q
 ## 目录
 
 ```text
-├── configs/baseline.yaml      研究参数
+├── configs/baseline.yaml      研究参数规格（声明式，当前脚本未读取）
 ├── data/raw/baostock/         每只股票一个 parquet
 ├── data/raw/neutralization/   行业快照与每日市值（本地数据，不进 Git）
 ├── data/processed/            面板与信号
@@ -58,11 +58,17 @@ python -m pytest tests -q
 
 ## 当前状态
 
-已完成：800 只下载、后复权面板、复权校验、数据质量审计、信号重算、逐日横截面统计、五分组单调性检查及分年度稳定性。HAC 统计代码及独立测试已加入审查分支，GitHub 自动化测试已通过；HAC 的 27 行统计结果已根据本地输出归档。
+已完成：800 只下载、后复权面板、复权校验、数据质量审计、信号重算、逐日横截面统计、五分组单调性检查、分年度稳定性，以及 HAC 稳健性检验。HAC 代码、独立测试和 27 行结果均已合并到 `main`。
 
-结果：在当前样本与口径下**没有发现明确短期反转证据**。修复后的九组普通 t 值约在 -0.891 到 +0.192 之间；这些值仍需用 HAC 与其他稳健性检验复核。
+结果：在当前样本与口径下**没有发现明确短期反转证据**。HAC 的 9 个主设定和 18 个敏感性设定全部 p > 0.05；但这只是统计推断结果，不是扣费后的组合收益。
 
 待完成：完善历史动态股票池、行业与市值中性化、交易成本与严格样本外检验。已有横截面结果见 [横截面检验报告](docs/reports/cross_section_2026-11-05.md)；HAC 复核见 [HAC 检验结果报告](docs/reports/hac_results_2026-11-05.md)。
+
+### 结果血缘（必读）
+
+- `results/tables/cross_section_summary.csv`、`quantile_summary.csv`、`quantile_monotonicity.csv`、`subsample_stability.csv` 以及 `docs/reports/cross_section_2026-11-05.md` 生成于 `ed53761`，**早于 PR #2 的未来标签泄漏修复**，不能当作修复后的重跑结果。
+- `results/tables/hac_robustness_summary.csv` 使用修复后的本地逐日明细；但这份 `cross_section_daily_detail.csv` 没有入库。因此 HAC 表可用于解释 HAC 结论，不能证明旧横截面表已被重跑。
+- 引用具体数值前先看 [架构考古与历史包袱审计](docs/audits/2026-11-18-architecture-archaeology.md) 的结果血缘表。
 
 ### 行业与市值中性化：数据准备
 
@@ -101,7 +107,7 @@ python src/download_neutralization_data.py --force
 
 1. 股票池是当前指数成分快照，样本期内退市或调出的股票不在其中，存在幸存者偏差。
 2. 样本期只有 2020–2025，且只覆盖大市值股票，不能外推到更早或更小市值的市场结构。
-3. 2 日、5 日持有期存在重叠，原有普通 t 值未做 HAC 修正；它不是 HAC t 值的上界，不能预判修正方向。
+3. 2 日、5 日持有期存在重叠。普通 t 值没有修正序列相关，也不能当作 HAC t 值的上界；HAC 复核结果见独立报告。
 4. 涨跌停判定为近似规则，回测成交假设仍需细化。
 
 ## 文档
@@ -109,13 +115,15 @@ python src/download_neutralization_data.py --force
 | 文档 | 内容 |
 |---|---|
 | [PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) | 决策记录、研究口径、当前状态、技术债 |
+| [架构考古与历史包袱审计](docs/audits/2026-11-18-architecture-archaeology.md) | 全量 Git/PR 演化、设计分类、结果血缘与清理边界 |
 | [数据底座报告](docs/reports/data_base_2026-11-01.md) | 下载覆盖、复权校验、修复记录 |
 | [数据质量报告](docs/reports/data_quality_v2.md) | 按年覆盖、停牌、涨跌停 |
 | [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性 |
+| [HAC 检验结果](docs/reports/hac_results_2026-11-05.md) | 27 组 HAC 推断、置信区间与研究边界 |
 
 ## T2.3：HAC 稳健性检验
 
-主程序：`src/evaluate_hac.py`，读取上一阶段生成的 `results/tables/cross_section_daily_detail.csv`，对九组「形成期 × 评价期」依次报告三种 Newey–West/Bartlett 滞后阶数：`max(0, 持有期-1)`（主设定）、5、10。输出为 `results/tables/hac_robustness_summary.csv`（27 行、中文表头、保留数值列便于后续计算）。
+主程序：`src/evaluate_hac.py`，读取上一阶段本地生成的 `results/tables/cross_section_daily_detail.csv`（该明细不入库），对九组「形成期 × 评价期」依次报告三种 Newey–West/Bartlett 滞后阶数：`max(0, 持有期-1)`（主设定）、5、10。输出为 `results/tables/hac_robustness_summary.csv`（27 行、中文表头、保留数值列便于后续计算）。
 
 ```powershell
 python src/evaluate_cross_section.py
@@ -132,4 +140,4 @@ python -m pytest tests -q
 
 已经根据本地完整逐日明细的输出归档 `results/tables/hac_robustness_summary.csv`（27 行）。全部 27 组的双侧 p 值均大于 0.05，95% HAC 置信区间均包含零；九组主设定中最小双侧 p 值约 0.373。该结果不支持当前样本存在稳健的非零平均短期反转收益差，但不证明其他股票池或其他市场环境不存在反转。
 
-[查看完整 HAC 数值与研究边界](docs/reports/hac_results_2026-11-05.md)。合并此分支之前仍需审查最新 CI 状态以及本地执行日志。
+[查看完整 HAC 数值与研究边界](docs/reports/hac_results_2026-11-05.md)。PR #3 已合并；HAC 输入明细未入库，换机器复现时需先重跑横截面并保存逐日明细。
