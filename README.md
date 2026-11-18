@@ -58,7 +58,7 @@ python -m pytest tests -q
 
 ## 当前状态
 
-已完成：800 只下载、后复权面板、复权校验、数据质量审计、信号重算、逐日横截面统计、五分组单调性检查、分年度稳定性，以及 HAC 稳健性检验。HAC 代码、独立测试和 27 行结果均已合并到 `main`。
+已完成：800 只下载、后复权面板、复权校验、数据质量审计、信号重算、逐日横截面统计、五分组单调性检查、分年度稳定性，以及 HAC 稳健性检验。修复后的横截面表和 HAC 表已重新生成，逐日明细已入库。
 
 结果：在当前样本与口径下**没有发现明确短期反转证据**。HAC 的 9 个主设定和 18 个敏感性设定全部 p > 0.05；但这只是统计推断结果，不是扣费后的组合收益。
 
@@ -66,9 +66,10 @@ python -m pytest tests -q
 
 ### 结果血缘（必读）
 
-- `results/tables/cross_section_summary.csv`、`quantile_summary.csv`、`quantile_monotonicity.csv`、`subsample_stability.csv` 以及 `docs/reports/cross_section_2026-11-05.md` 生成于 `ed53761`，**早于 PR #2 的未来标签泄漏修复**，不能当作修复后的重跑结果。
-- `results/tables/hac_robustness_summary.csv` 使用修复后的本地逐日明细；但这份 `cross_section_daily_detail.csv` 没有入库。因此 HAC 表可用于解释 HAC 结论，不能证明旧横截面表已被重跑。
-- 引用具体数值前先看 [架构考古与历史包袱审计](docs/audits/2026-11-18-architecture-archaeology.md) 的结果血缘表。
+- `results/tables/cross_section_*.csv`、五分组表、分年度表和 `results/tables/hac_robustness_summary.csv` 已在 2026-11-18 使用修复后的代码重跑。
+- `results/tables/cross_section_daily_detail.csv` 已入库，HAC 输入可追溯。
+- [横截面历史报告](docs/reports/cross_section_2026-11-05.md) 保留的是修复前旧输出；当前结论以 [最终结算报告](docs/reports/final_verdict_2026-11-18.md) 为准。
+- 完整审计见 [架构考古与历史包袱审计](docs/audits/2026-11-18-architecture-archaeology.md)。
 
 ### 行业与市值中性化：数据准备
 
@@ -120,10 +121,11 @@ python src/download_neutralization_data.py --force
 | [数据质量报告](docs/reports/data_quality_v2.md) | 按年覆盖、停牌、涨跌停 |
 | [横截面检验报告](docs/reports/cross_section_2026-11-05.md) | 9 组统计、五分组单调性、分年度稳定性 |
 | [HAC 检验结果](docs/reports/hac_results_2026-11-05.md) | 27 组 HAC 推断、置信区间与研究边界 |
+| [最终结算报告](docs/reports/final_verdict_2026-11-18.md) | 修复后重跑、最终零结果与数据边界 |
 
 ## T2.3：HAC 稳健性检验
 
-主程序：`src/evaluate_hac.py`，读取上一阶段本地生成的 `results/tables/cross_section_daily_detail.csv`（该明细不入库），对九组「形成期 × 评价期」依次报告三种 Newey–West/Bartlett 滞后阶数：`max(0, 持有期-1)`（主设定）、5、10。输出为 `results/tables/hac_robustness_summary.csv`（27 行、中文表头、保留数值列便于后续计算）。
+主程序：`src/evaluate_hac.py`，读取 `results/tables/cross_section_daily_detail.csv`，对九组「形成期 × 评价期」依次报告三种 Newey–West/Bartlett 滞后阶数：`max(0, 持有期-1)`（主设定）、5、10。输出为 `results/tables/hac_robustness_summary.csv`（27 行、中文表头、保留数值列便于后续计算）。
 
 ```powershell
 python src/evaluate_cross_section.py
@@ -140,4 +142,4 @@ python -m pytest tests -q
 
 已经根据本地完整逐日明细的输出归档 `results/tables/hac_robustness_summary.csv`（27 行）。全部 27 组的双侧 p 值均大于 0.05，95% HAC 置信区间均包含零；九组主设定中最小双侧 p 值约 0.373。该结果不支持当前样本存在稳健的非零平均短期反转收益差，但不证明其他股票池或其他市场环境不存在反转。
 
-[查看完整 HAC 数值与研究边界](docs/reports/hac_results_2026-11-05.md)。PR #3 已合并；HAC 输入明细未入库，换机器复现时需先重跑横截面并保存逐日明细。
+[查看完整 HAC 数值与研究边界](docs/reports/hac_results_2026-11-05.md)。PR #3 已合并，HAC 输入明细已随最终重跑入库。
